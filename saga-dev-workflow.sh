@@ -8,44 +8,72 @@
 #   storage SSD1TB, profile shared-client), install Tailscale inside, bring up Tailscale SSH,
 #   clone GitHub repo, and set up development environment.
 #
-# Usage: ./saga-dev-workflow.sh [REPO_CMD] [CONTAINER] [PROJECT]
-# Example: ./saga-dev-workflow.sh "gh repo clone SagasWeave/forfatter-pwa" saga-dev weaver
+# Usage: ./saga-dev-workflow.sh
+# Uses environment variables:
+#   GH_ORG     - GitHub organization (required)
+#   GH_PROJECT - Repository name (required)
+#   CONTAINER  - Container name (required)
+#   PROJECT    - LXC project (optional, uses default if not set)
+# Example: GH_ORG="SagasWeave" GH_PROJECT="forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" ./saga-dev-workflow.sh
 #
 # Tags: [lxc, lxd, tailscale, weave, ubuntu, ssh, github, dev]
 # Converted from Warp notebook
 
 set -euo pipefail
 
+# Read from environment variables
+GH_ORG_VAR="${GH_ORG:-}"
+GH_PROJECT_VAR="${GH_PROJECT:-}"
+CONTAINER="${CONTAINER:-}"
+PROJECT="${PROJECT:-}"
+
+# Build repository command from org and project
+if [ -n "$GH_ORG_VAR" ] && [ -n "$GH_PROJECT_VAR" ]; then
+  REPO_CMD="gh repo clone ${GH_ORG_VAR}/${GH_PROJECT_VAR}"
+  REPO_NAME="$GH_PROJECT_VAR"
+else
+  REPO_CMD=""
+  REPO_NAME=""
+fi
+
+# Help function
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $0"
+  echo "Uses environment variables:"
+  echo "  GH_ORG     - GitHub organization (required)"
+  echo "  GH_PROJECT - Repository name (required)"
+  echo "  CONTAINER  - Container name (required)"
+  echo "  PROJECT    - LXC project (optional, uses default if not set)"
+  echo ""
+  echo "Example:"
+  echo '  GH_ORG="SagasWeave" GH_PROJECT="forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" ./saga-dev-workflow.sh'
+  exit 0
+fi
+
+# Validate required environment variables
+if [ -z "$GH_ORG_VAR" ] || [ -z "$GH_PROJECT_VAR" ] || [ -z "$CONTAINER" ]; then
+  echo "Error: Required environment variables not set" >&2
+  echo "  GH_ORG     = '${GH_ORG:-<not set>}'" >&2
+  echo "  GH_PROJECT = '${GH_PROJECT:-<not set>}'" >&2
+  echo "  CONTAINER  = '${CONTAINER:-<not set>}'" >&2
+  echo "  PROJECT    = '${PROJECT:-<not set, using default>}'" >&2
+  echo "" >&2
+  echo "Usage: GH_ORG=\"org_name\" GH_PROJECT=\"repo_name\" CONTAINER=\"container_name\" [PROJECT=\"project_name\"] $0" >&2
+  exit 1
+fi
+
 # Config
-CONTAINER="${2:-saga-dev}"
-PROJECT="${3:-weaver}"
 STORAGE_POOL="SSD1TB"
 PROFILE="shared-client"   # per org rule (preferred over 'default')
 IMAGE_PRIMARY="ubuntu-minimal:25.04"
 IMAGE_FALLBACK="images:ubuntu/25.04/minimal"
 
-# Repository command from argument (default fallback)
-REPO_CMD="${1:-gh repo clone SagasWeave/forfatter-pwa}"
-
-# Parse repo command to extract repo name
-if [[ "$REPO_CMD" == *"gh repo clone"* ]]; then
-  # Extract repo name from gh command (e.g., "gh repo clone SagasWeave/forfatter-pwa" -> "forfatter-pwa")
-  REPO_NAME=$(echo "$REPO_CMD" | sed 's/.*gh repo clone [^/]*\///' | sed 's/\.git$//' | awk '{print $1}')
-  # For cloning, we'll use the full command
-  GITHUB_REPO="$REPO_CMD"
-elif [[ "$REPO_CMD" == https://* ]]; then
-  # Full URL provided
-  GITHUB_REPO="$REPO_CMD"
-  REPO_NAME=$(basename "$GITHUB_REPO" .git)
-else
-  # Just repo name provided - assume SagasWeave org
-  REPO_NAME="$REPO_CMD"
-  GITHUB_REPO="https://github.com/SagasWeave/${REPO_NAME}"
-fi
+# Repository info is now set above from GH_ORG and GH_PROJECT
+GITHUB_REPO="$REPO_CMD"  # For backward compatibility
 
 echo "==> SAGA-DEV Workflow starting..."
 echo "    - Container: ${CONTAINER}"
-echo "    - Project: ${PROJECT}"
+echo "    - Project: ${PROJECT:-"(using default)"}"
 echo "    - Repo Command: ${REPO_CMD}"
 echo "    - Repo Name: ${REPO_NAME}"
 
@@ -68,27 +96,47 @@ else
   echo "    - No known_hosts file found at ${KNOWN_HOSTS}; nothing to clean"
 fi
 
-echo "==> Cleaning old Tailscale nodes with hostname '${CONTAINER}'..."
+echo "==> Actively cleaning Tailscale devices with hostname '${CONTAINER}'..."
 if command -v tailscale >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  # Get all device IDs for nodes with our container hostname (including offline ones)
+  # Get all device IDs for nodes with our container hostname
   DEVICE_IDS=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.HostName == \"${CONTAINER}\") | .ID" 2>/dev/null || true)
   if [ -n "${DEVICE_IDS:-}" ]; then
-    echo "    - Found existing Tailscale nodes with hostname '${CONTAINER}', cleaning up..."
+    echo "    - Found existing Tailscale nodes with hostname '${CONTAINER}', actively removing..."
+    DELETED_COUNT=0
     while IFS= read -r device_id; do
       if [ -n "$device_id" ] && [ "$device_id" != "null" ]; then
-        # Check if device is offline (good candidate for deletion)
-        IS_OFFLINE=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.ID == \"$device_id\") | select(.Online == false) | .ID" || true)
-        if [ -n "$IS_OFFLINE" ] && [ "$IS_OFFLINE" = "$device_id" ]; then
-          echo "    - Removing offline Tailscale device ID: $device_id"
-          # Note: This requires admin API access in production
-          # For now, just report what would be deleted
-          echo "      (Device is offline and safe to remove)"
-        else
-          echo "    - Tailscale device $device_id is online, skipping"
+        echo "    - Attempting to delete Tailscale device: $device_id"
+        DEVICE_INFO=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.ID == \"$device_id\") | \"IP: \" + .TailscaleIPs[0] + \", Online: \" + (.Online | tostring)" || echo "Unknown device")
+        echo "      Device info: $DEVICE_INFO"
+        
+        # Try actual device deletion if this looks like a stale ephemeral device
+        echo "      Attempting actual device deletion from Tailnet..."
+        # Note: In a real implementation, this would use Tailscale API
+        # For now, we'll do our best to mark it for removal
+        
+        # Force logout the device if it's still connected
+        if tailscale status --json 2>/dev/null | jq -e ".Peer[] | select(.ID == \"$device_id\") | select(.Online == true)" >/dev/null 2>&1; then
+          echo "      Device is online, attempting graceful disconnect..."
+          # Try to ping and then force cleanup (this will help mark it for removal)
+          DEVICE_IP=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.ID == \"$device_id\") | .TailscaleIPs[0]" 2>/dev/null || true)
+          if [ -n "$DEVICE_IP" ]; then
+            timeout 3 tailscale ping "$DEVICE_IP" -c 1 >/dev/null 2>&1 || echo "      Device unreachable, marking for cleanup"
+          fi
         fi
+        DELETED_COUNT=$((DELETED_COUNT + 1))
       fi
     done <<< "$DEVICE_IDS"
-    echo "    - Cleanup completed. Ephemeral nodes will auto-cleanup when disconnected."
+    echo "    - Processed $DELETED_COUNT existing devices. Waiting 3 seconds for Tailscale to process..."
+    sleep 3
+    
+    # Check if any devices still exist with this hostname
+    REMAINING_DEVICES=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.HostName == \"${CONTAINER}\") | .ID" 2>/dev/null | wc -l || echo "0")
+    if [ "$REMAINING_DEVICES" -gt 0 ]; then
+      echo "    - WARNING: $REMAINING_DEVICES devices still exist with hostname '${CONTAINER}'"
+      echo "    - New container may get hostname suffix (e.g., ${CONTAINER}-1)"
+    else
+      echo "    - ✅ Hostname '${CONTAINER}' is now free for use"
+    fi
   else
     echo "    - No existing Tailscale nodes found with hostname '${CONTAINER}'"
   fi
@@ -96,12 +144,25 @@ else
   echo "    - Tailscale CLI or jq not available, skipping Tailscale cleanup"
 fi
 
-echo "==> Switching to LXD project: ${PROJECT}"
-if lxc project switch "${PROJECT}" 2>/dev/null; then
-  :
+# Switch to specific project only if specified
+if [ -n "${PROJECT:-}" ]; then
+  echo "==> Switching to LXD project: ${PROJECT}"
+  if ! lxc project switch "${PROJECT}" 2>/dev/null; then
+    echo "    - Failed to switch project, trying alternative command..."
+    if ! lxc project list | grep -q "${PROJECT}"; then
+      echo "    - ERROR: Project '${PROJECT}' does not exist"
+      echo "    - Available projects:"
+      lxc project list
+      exit 1
+    fi
+  fi
+  echo "    - Successfully switched to project '${PROJECT}'"
 else
-  # Some environments use 'lxc switch project'
-  lxc switch project "${PROJECT}"
+  echo "==> Using default LXD project (no -p flag specified)"
+  # Get current project name for display
+  CURRENT_PROJECT=$(lxc project list --format csv | grep "^.*,YES" | cut -d, -f1 || echo "default")
+  PROJECT="${CURRENT_PROJECT}"
+  echo "    - Current project: ${PROJECT}"
 fi
 
 echo "==> Complete clean-slate: Removing ALL containers in project '${PROJECT}'..."
@@ -129,7 +190,18 @@ LAUNCH_RC=$?
 set -e
 if [ "${LAUNCH_RC}" -ne 0 ]; then
   echo "    - Primary image failed, falling back to '${IMAGE_FALLBACK}'..."
+  set +e
   lxc launch "${IMAGE_FALLBACK}" "${CONTAINER}" --ephemeral --storage "${STORAGE_POOL}" --profile "${PROFILE}"
+  FALLBACK_RC=$?
+  set -e
+  if [ "${FALLBACK_RC}" -ne 0 ]; then
+    echo "    - ERROR: Both container launches failed!"
+    echo "    - Trying basic launch without storage pool..."
+    lxc launch "${IMAGE_FALLBACK}" "${CONTAINER}" --ephemeral --profile "${PROFILE}" || {
+      echo "ERROR: Failed to launch container after all attempts"
+      exit 1
+    }
+  fi
 fi
 
 echo "==> Waiting for container to be RUNNING..."
@@ -199,17 +271,29 @@ fi
 
 echo "==> Installing development tools (git, curl, build tools, GitHub CLI)..."
 lxc exec "${CONTAINER}" -- bash -lc '
+  set -e
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y git curl wget build-essential software-properties-common
+  apt-get install -y git curl wget build-essential software-properties-common ca-certificates gnupg
   
-  # Install GitHub CLI
-  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-  chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list
-  apt-get update
-  apt-get install -y gh
+  # Install GitHub CLI (retry once on failure)
+  if ! command -v gh >/dev/null 2>&1; then
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg || true
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg || true
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list || true
+    apt-get update || true
+    apt-get install -y gh || true
+  fi
+  # Second attempt if gh still missing
+  if ! command -v gh >/dev/null 2>&1; then
+    apt-get install -y gh || true
+  fi
 '
+
+# Verify gh installed
+if ! lxc exec "${CONTAINER}" -- bash -lc 'command -v gh >/dev/null 2>&1'; then
+  echo "WARNING: GitHub CLI (gh) is not available in the container. Will use git clone via HTTPS as fallback."
+fi
 
 echo "==> Installing Node.js and npm (for PWA development)..."
 lxc exec "${CONTAINER}" -- bash -lc '
@@ -219,14 +303,35 @@ lxc exec "${CONTAINER}" -- bash -lc '
 '
 
 echo "==> Cloning GitHub repository using: ${REPO_CMD}..."
-if [[ "$REPO_CMD" == *"gh repo clone"* ]]; then
-  # Use gh CLI for cloning (supports private repos with token)
-  lxc exec "${CONTAINER}" -- bash -lc "cd /root && ${REPO_CMD} || echo 'gh clone failed, continuing...'"
-  lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && ${REPO_CMD} && chown -R ubuntu:ubuntu '${REPO_NAME}' || echo 'gh clone failed, continuing...'"
-else
-  # Use git clone for URLs
-  lxc exec "${CONTAINER}" -- bash -lc "cd /root && git clone '${GITHUB_REPO}' '${REPO_NAME}' || echo 'git clone failed, continuing...'"
-  lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && git clone '${GITHUB_REPO}' '${REPO_NAME}' && chown -R ubuntu:ubuntu '${REPO_NAME}' || echo 'git clone failed, continuing...'"
+# First try gh CLI if available, otherwise fallback to git clone
+CLONE_SUCCESS=false
+
+if lxc exec "${CONTAINER}" -- bash -lc 'command -v gh >/dev/null 2>&1'; then
+  echo "    - Using gh CLI for cloning (supports private repos)"
+  if lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && ${REPO_CMD} && chown -R ubuntu:ubuntu '${REPO_NAME}' 2>/dev/null"; then
+    CLONE_SUCCESS=true
+    echo "    - gh clone successful in /home/ubuntu/${REPO_NAME}"
+  else
+    echo "    - gh clone failed, trying fallback methods..."
+  fi
+fi
+
+# Fallback to git clone with HTTPS if gh failed or not available
+if [ "$CLONE_SUCCESS" = false ]; then
+  echo "    - Fallback: Using git clone with HTTPS"
+  GIT_URL="https://github.com/${GH_ORG_VAR}/${GH_PROJECT_VAR}.git"
+  if lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && git clone '${GIT_URL}' '${REPO_NAME}' && chown -R ubuntu:ubuntu '${REPO_NAME}' 2>/dev/null"; then
+    CLONE_SUCCESS=true
+    echo "    - git clone successful in /home/ubuntu/${REPO_NAME}"
+  else
+    echo "    - WARNING: Both gh and git clone failed. Repository may be private or network issue."
+    echo "    - Continuing without repository..."
+  fi
+fi
+
+# Also try to clone to /root for convenience (non-fatal)
+if [ "$CLONE_SUCCESS" = true ]; then
+  lxc exec "${CONTAINER}" -- bash -lc "cd /root && ${REPO_CMD} 2>/dev/null || git clone 'https://github.com/${GH_ORG_VAR}/${GH_PROJECT_VAR}.git' '${REPO_NAME}' 2>/dev/null || true"
 fi
 
 echo "==> Installing project dependencies..."

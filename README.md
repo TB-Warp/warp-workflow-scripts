@@ -9,19 +9,19 @@ Collection of powerful Warp terminal workflow scripts for development automation
 
 **Usage:**
 ```bash
-./saga-dev-workflow.sh [REPO_CMD] [CONTAINER] [PROJECT]
+GH_PROJECT="repo_cmd" CONTAINER="container_name" [PROJECT="project_name"] ./saga-dev-workflow.sh
 ```
 
 **Examples:**
 ```bash
-# Default setup with forfatter-pwa
-./saga-dev-workflow.sh
+# Using GitHub CLI with specific project
+GH_PROJECT="gh repo clone SagasWeave/forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" ./saga-dev-workflow.sh
 
-# Custom repo using GitHub CLI
-./saga-dev-workflow.sh "gh repo clone SagasWeave/forfatter-pwa" saga-dev weaver
+# Using default project (PROJECT not set)
+GH_PROJECT="gh repo clone SagasWeave/my-repo" CONTAINER="my-container" ./saga-dev-workflow.sh
 
 # Using HTTPS URL
-./saga-dev-workflow.sh "https://github.com/SagasWeave/my-repo" my-container my-project
+GH_PROJECT="https://github.com/SagasWeave/my-repo" CONTAINER="my-container" PROJECT="my-project" ./saga-dev-workflow.sh
 ```
 
 **Features:**
@@ -78,11 +78,11 @@ Collection of powerful Warp terminal workflow scripts for development automation
 name: SAGA-DEV
 command: |
   cd /Users/lpm/Documents/Warp
-  ./saga-dev-workflow.sh {{repo}} {{lxc_container}} {{lxc_project}}
+  ./saga-dev-workflow.sh -r {{repo}} -c {{lxc_container}} -p {{lxc_project}}
 arguments:
   - repo: "gh repo clone SagasWeave/forfatter-pwa"
   - lxc_container: "saga-dev"  
-  - lxc_project: "weaver"
+  - lxc_project: "weaver"  # Optional - omit to use default project
 environment_variables:
   GITHUB_TOKEN: "your_token_here"
 ```
