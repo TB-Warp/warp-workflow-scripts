@@ -9,7 +9,14 @@
 
 set -euo pipefail
 
-# Use environment variables from Warp Drive (EXACTLY like original working version)
+# Debug: Check what Warp Drive actually passes us
+echo "🔍 Raw environment from Warp Drive:" >&2
+echo "  GH_ORG: '${GH_ORG:-NOT_SET}'" >&2  
+echo "  GH_PROJECT: '${GH_PROJECT:-NOT_SET}'" >&2
+echo "  CONTAINER: '${CONTAINER:-NOT_SET}'" >&2
+echo "  GITHUB_TOKEN: $([ -n "${GITHUB_TOKEN:-}" ] && echo "SET(${#GITHUB_TOKEN}chars)" || echo "NOT_SET")" >&2
+
+# Use environment variables from Warp Drive
 GH_ORG_VAR="${GH_ORG:-SagasWeave}"
 GH_PROJECT_VAR="${GH_PROJECT:-forfatter-pwa}"
 CONTAINER="${CONTAINER:-saga-dev}"
@@ -18,6 +25,9 @@ IMAGE="${IMAGE:-ubuntu:24.04}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 FRAMEWORKS="${FRAMEWORKS:-node:npm:ts:nextjs:mui}"
 REPO_NAME="$GH_PROJECT_VAR"
+
+echo "🎯 Final values:" >&2
+echo "  TOKEN: $([ -n "$GITHUB_TOKEN" ] && echo "SET(${#GITHUB_TOKEN}chars)" || echo "NOT_SET")" >&2
 
 # Validate required variables (allow defaults for Warp Drive compatibility)
 if [ "$GH_ORG_VAR" = "SagasWeave" ] && [ "$GH_PROJECT_VAR" = "forfatter-pwa" ] && [ "$CONTAINER" = "saga-dev" ]; then
