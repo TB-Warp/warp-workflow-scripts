@@ -29,8 +29,8 @@ REPO_CMD="${1:-gh repo clone SagasWeave/forfatter-pwa}"
 
 # Parse repo command to extract repo name
 if [[ "$REPO_CMD" == *"gh repo clone"* ]]; then
-  # Extract repo name from gh command
-  REPO_NAME=$(echo "$REPO_CMD" | sed 's/.*\///' | sed 's/\.git$//')
+  # Extract repo name from gh command (e.g., "gh repo clone SagasWeave/forfatter-pwa" -> "forfatter-pwa")
+  REPO_NAME=$(echo "$REPO_CMD" | sed 's/.*gh repo clone [^/]*\///' | sed 's/\.git$//' | awk '{print $1}')
   # For cloning, we'll use the full command
   GITHUB_REPO="$REPO_CMD"
 elif [[ "$REPO_CMD" == https://* ]]; then
@@ -189,15 +189,26 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
   echo "    - Configuring GitHub token in container"
   lxc exec "${CONTAINER}" -- bash -lc "echo 'export GITHUB_TOKEN=${GITHUB_TOKEN}' >> /root/.bashrc"
   lxc exec "${CONTAINER}" -- bash -lc "echo 'export GITHUB_TOKEN=${GITHUB_TOKEN}' >> /home/ubuntu/.bashrc"
+  
+  # Authenticate gh CLI with token
+  echo "    - Authenticating GitHub CLI with token"
+  lxc exec "${CONTAINER}" -- bash -lc "echo '${GITHUB_TOKEN}' | gh auth login --with-token"
 else
   echo "    - WARNING: GITHUB_TOKEN not set, git operations may fail"
 fi
 
-echo "==> Installing development tools (git, curl, build tools)..."
+echo "==> Installing development tools (git, curl, build tools, GitHub CLI)..."
 lxc exec "${CONTAINER}" -- bash -lc '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y git curl wget build-essential software-properties-common
+  
+  # Install GitHub CLI
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+  chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list
+  apt-get update
+  apt-get install -y gh
 '
 
 echo "==> Installing Node.js and npm (for PWA development)..."
@@ -245,7 +256,7 @@ echo "    - Repository: ${REPO_NAME}"
 echo "    - Location: /home/ubuntu/${REPO_NAME} (and /root/${REPO_NAME})"
 echo
 echo "Next steps (from your macOS terminal):"
-echo "  1) Connect via SSH: ssh ubuntu@saga-dev"
+echo "  1) Connect via SSH: ssh ubuntu@${CONTAINER}"
 echo "  2) Navigate to project: cd ${REPO_NAME}"
 echo "  3) Start development (example for PWA):"
 echo "     npm run dev          # Start development server"
@@ -253,8 +264,8 @@ echo "     npm run build        # Build for production"
 echo "     npm run test         # Run tests"
 echo
 echo "Quick SSH commands:"
-echo "  ssh ubuntu@saga-dev                    # Connect to container"
-echo "  ssh ubuntu@saga-dev 'cd ${REPO_NAME} && npm run dev'  # Start dev server directly"
+echo "  ssh ubuntu@${CONTAINER}                    # Connect to container"
+echo "  ssh ubuntu@${CONTAINER} 'cd ${REPO_NAME} && npm run dev'  # Start dev server directly"
 echo
 echo "==> Final status:"
 echo "✅ Container: ${CONTAINER} (ephemeral)"
