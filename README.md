@@ -135,7 +135,7 @@ command: |
 
 4. **Environment Variables:**
    ```bash
-   export GITHUB_TOKEN="ghp_your_token_here"
+   export GITHUB_TOKEN="your_token_here"
    ```
 
 ## 🎨 Use Cases

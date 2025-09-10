@@ -27,10 +27,20 @@ if [ -z "$GH_ORG_VAR" ] || [ -z "$GH_PROJECT_VAR" ] || [ -z "$CONTAINER" ]; then
     exit 1
 fi
 
+# Debug environment variables
+log_info "Debug: Environment variables detection:"
+log_info "  GH_ORG = '${GH_ORG:-<not set>}'"
+log_info "  GH_PROJECT = '${GH_PROJECT:-<not set>}'"
+log_info "  CONTAINER = '${CONTAINER:-<not set>}'"
+log_info "  GITHUB_TOKEN = '$([ -n "${GITHUB_TOKEN:-}" ] && echo "<SET (${#GITHUB_TOKEN} chars)>" || echo "<NOT SET>")'"
+
 # Warn if GitHub token is missing
 if [ -z "$GITHUB_TOKEN" ]; then
     echo "⚠️  WARNING: GITHUB_TOKEN not set - private repos may fail to clone" >&2
-    echo "   Set with: export GITHUB_TOKEN=\"your_token_here\"" >&2
+    echo "   Current environment variables from Warp Drive:" >&2
+    env | grep -E '^(GH_|GITHUB_|CONTAINER|PROJECT|IMAGE|FRAMEWORKS)' | sort >&2 || echo "   No Warp Drive environment variables found" >&2
+else
+    log_info "GitHub token detected (${#GITHUB_TOKEN} characters)"
 fi
 
 # Derived variables
