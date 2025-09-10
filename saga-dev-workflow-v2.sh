@@ -27,20 +27,13 @@ if [ -z "$GH_ORG_VAR" ] || [ -z "$GH_PROJECT_VAR" ] || [ -z "$CONTAINER" ]; then
     exit 1
 fi
 
-# Debug environment variables
-log_info "Debug: Environment variables detection:"
-log_info "  GH_ORG = '${GH_ORG:-<not set>}'"
-log_info "  GH_PROJECT = '${GH_PROJECT:-<not set>}'"
-log_info "  CONTAINER = '${CONTAINER:-<not set>}'"
-log_info "  GITHUB_TOKEN = '$([ -n "${GITHUB_TOKEN:-}" ] && echo "<SET (${#GITHUB_TOKEN} chars)>" || echo "<NOT SET>")'"
-
-# Warn if GitHub token is missing
+# Warn if GitHub token is missing (simple version without log_info)
 if [ -z "$GITHUB_TOKEN" ]; then
     echo "⚠️  WARNING: GITHUB_TOKEN not set - private repos may fail to clone" >&2
     echo "   Current environment variables from Warp Drive:" >&2
     env | grep -E '^(GH_|GITHUB_|CONTAINER|PROJECT|IMAGE|FRAMEWORKS)' | sort >&2 || echo "   No Warp Drive environment variables found" >&2
 else
-    log_info "GitHub token detected (${#GITHUB_TOKEN} characters)"
+    echo "✅ GitHub token detected (${#GITHUB_TOKEN} characters)" >&2
 fi
 
 # Derived variables
@@ -96,6 +89,17 @@ log_info "Project: ${PROJECT:-\"(using default)\"}"
 log_info "Image: ${IMAGE}"
 log_info "Repository: ${GH_ORG_VAR}/${GH_PROJECT_VAR}"
 log_info "Frameworks: ${FRAMEWORKS}"
+
+# Debug environment variables (now that log_info is defined)
+log_info "Debug: Environment variables detection:"
+log_info "  GH_ORG = '${GH_ORG:-<not set>}'"
+log_info "  GH_PROJECT = '${GH_PROJECT:-<not set>}'"
+log_info "  CONTAINER = '${CONTAINER:-<not set>}'"
+log_info "  GITHUB_TOKEN = '$([ -n "${GITHUB_TOKEN:-}" ] && echo "<SET (${#GITHUB_TOKEN} chars)>" || echo "<NOT SET>")'"
+if [ -z "$GITHUB_TOKEN" ]; then
+    log_info "Environment dump (GH/GITHUB variables):"
+    env | grep -E '^(GH_|GITHUB_|CONTAINER|PROJECT|IMAGE|FRAMEWORKS)' | sort | while read line; do log_info "  $line"; done
+fi
 
 # Clean up old status files and create dependency tracking
 rm -f /tmp/*-done /tmp/*-err /tmp/*-ready 2>/dev/null || true
