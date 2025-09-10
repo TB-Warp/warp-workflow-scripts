@@ -313,11 +313,20 @@ lxc exec "${CONTAINER}" --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" --env GH_ORG_VAR=
     echo "export GITHUB_TOKEN=${GITHUB_TOKEN}" >> /home/ubuntu/.bashrc
   fi
   
-  # Create comprehensive async bootstrap script
+  # Create comprehensive async bootstrap script with env vars
   cat > /root/bootstrap_async.sh << "EOF_ASYNC"
 #!/bin/bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+
+# Export all required environment variables from the main script
+export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+export GH_ORG_VAR="${GH_ORG_VAR:-}"
+export GH_PROJECT_VAR="${GH_PROJECT_VAR:-}"
+export REPO_NAME="${REPO_NAME:-}"
+export FRAMEWORKS="${FRAMEWORKS:-}"
+export CONTAINER="${CONTAINER:-}"
+
 echo "$(date): Starting async bootstrap jobs..." > /tmp/bootstrap.log
 
 # Robust apt wrapper with timeout and retry
