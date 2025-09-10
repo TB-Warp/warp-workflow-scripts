@@ -10,11 +10,14 @@
 #
 # Usage: ./saga-dev-workflow.sh
 # Uses environment variables:
-#   GH_ORG     - GitHub organization (required)
-#   GH_PROJECT - Repository name (required)
-#   CONTAINER  - Container name (required)
-#   PROJECT    - LXC project (optional, uses default if not set)
-# Example: GH_ORG="SagasWeave" GH_PROJECT="forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" ./saga-dev-workflow.sh
+#   GH_ORG       - GitHub organization (required)
+#   GH_PROJECT   - Repository name (required) 
+#   CONTAINER    - Container name (required)
+#   PROJECT      - LXC project (optional, uses default if not set)
+#   IMAGE        - Container image (optional, defaults to Ubuntu 24.04 LTS)
+#   GITHUB_TOKEN - GitHub token for private repos (recommended)
+#   FIGMA_PROJECT- Figma project identifier (optional, for future use)
+# Example: GH_ORG="SagasWeave" GH_PROJECT="forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" IMAGE="ubuntu:24.04" FRAMEWORKS="node:npm:ts:nextjs:mui" ./saga-dev-workflow.sh
 #
 # Tags: [lxc, lxd, tailscale, weave, ubuntu, ssh, github, dev]
 # Converted from Warp notebook
@@ -40,13 +43,17 @@ fi
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "Usage: $0"
   echo "Uses environment variables:"
-  echo "  GH_ORG     - GitHub organization (required)"
-  echo "  GH_PROJECT - Repository name (required)"
-  echo "  CONTAINER  - Container name (required)"
-  echo "  PROJECT    - LXC project (optional, uses default if not set)"
+  echo "  GH_ORG       - GitHub organization (required)"
+  echo "  GH_PROJECT   - Repository name (required)"
+  echo "  CONTAINER    - Container name (required)"
+  echo "  PROJECT      - LXC project (optional, uses default if not set)"
+  echo "  IMAGE        - Container image (optional, e.g. ubuntu:24.04, ubuntu:22.04)"
+  echo "  GITHUB_TOKEN - GitHub token for private repos (recommended)"
+  echo "  FRAMEWORKS   - Colon-separated frameworks (node:npm:ts:nextjs:mui:go:haxe)"
+  echo "  FIGMA_PROJECT- Figma project identifier (optional, future use)"
   echo ""
   echo "Example:"
-  echo '  GH_ORG="SagasWeave" GH_PROJECT="forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" ./saga-dev-workflow.sh'
+  echo '  GH_ORG="SagasWeave" GH_PROJECT="forfatter-pwa" CONTAINER="saga-dev" PROJECT="weave" IMAGE="ubuntu:24.04" FRAMEWORKS="node:npm:ts:nextjs:mui" ./saga-dev-workflow.sh'
   exit 0
 fi
 
@@ -65,8 +72,34 @@ fi
 # Config
 STORAGE_POOL="SSD1TB"
 PROFILE="shared-client"   # per org rule (preferred over 'default')
-IMAGE_PRIMARY="images:ubuntu/24.04"
-IMAGE_FALLBACK="ubuntu:24.04"
+
+# Handle IMAGE environment variable with flexible naming
+if [ -n "${IMAGE:-}" ]; then
+  # Convert common formats to proper LXC image names
+  case "$IMAGE" in
+    ubuntu24.04|ubuntu:24.04)
+      IMAGE_PRIMARY="ubuntu:24.04"
+      IMAGE_FALLBACK="images:ubuntu/24.04"
+      ;;
+    ubuntu22.04|ubuntu:22.04)
+      IMAGE_PRIMARY="ubuntu:22.04"
+      IMAGE_FALLBACK="images:ubuntu/22.04"
+      ;;
+    ubuntu25.04|ubuntu:25.04)
+      IMAGE_PRIMARY="ubuntu:25.04"
+      IMAGE_FALLBACK="images:ubuntu/25.04"
+      ;;
+    *)
+      # Use as-is for custom images
+      IMAGE_PRIMARY="$IMAGE"
+      IMAGE_FALLBACK="images:ubuntu/24.04"  # safe fallback
+      ;;
+  esac
+else
+  # Default to Ubuntu 24.04 LTS
+  IMAGE_PRIMARY="images:ubuntu/24.04"
+  IMAGE_FALLBACK="ubuntu:24.04"
+fi
 
 # Repository info is now set above from GH_ORG and GH_PROJECT
 GITHUB_REPO="$REPO_CMD"  # For backward compatibility
@@ -74,6 +107,7 @@ GITHUB_REPO="$REPO_CMD"  # For backward compatibility
 echo "==> SAGA-DEV Workflow starting..."
 echo "    - Container: ${CONTAINER}"
 echo "    - Project: ${PROJECT:-"(using default)"}"
+echo "    - Image: ${IMAGE:-"default (24.04 LTS)"} -> ${IMAGE_PRIMARY}"
 echo "    - Repo Command: ${REPO_CMD}"
 echo "    - Repo Name: ${REPO_NAME}"
 
@@ -292,38 +326,31 @@ else
   echo "    - WARNING: GITHUB_TOKEN not set, git operations may fail"
 fi
 
-echo "==> Installing development tools (git, curl, build tools, GitHub CLI)..."
+echo "==> Installing base tools (git, curl, certificates)..."
 lxc exec "${CONTAINER}" -- bash -lc '
   set -e
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y git curl wget build-essential software-properties-common ca-certificates gnupg
-  
-  # Install GitHub CLI (retry once on failure)
+  apt-get install -y git curl ca-certificates gnupg wget software-properties-common
+'
+
+# Optionally install GitHub CLI (best-effort). If missing, we use token-based git clone later.
+lxc exec "${CONTAINER}" -- bash -lc '
   if ! command -v gh >/dev/null 2>&1; then
-    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg || true
-    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg || true
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list || true
-    apt-get update || true
-    apt-get install -y gh || true
-  fi
-  # Second attempt if gh still missing
-  if ! command -v gh >/dev/null 2>&1; then
-    apt-get install -y gh || true
+    set -e
+    if curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null; then
+      chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg || true
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list >/dev/null || true
+      apt-get update || true
+      apt-get install -y gh || true
+    fi
   fi
 '
 
-# Verify gh installed
+# Warn if gh still missing (we will fallback to git+token)
 if ! lxc exec "${CONTAINER}" -- bash -lc 'command -v gh >/dev/null 2>&1'; then
   echo "WARNING: GitHub CLI (gh) is not available in the container. Will use git clone via HTTPS as fallback."
 fi
-
-echo "==> Installing Node.js and npm (for PWA development)..."
-lxc exec "${CONTAINER}" -- bash -lc '
-  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
-  apt-get install -y nodejs
-  npm install -g npm@latest
-'
 
 echo "==> Cloning GitHub repository using: ${REPO_CMD}..."
 # First try gh CLI if available, otherwise fallback to git clone
@@ -373,25 +400,91 @@ if [ "$CLONE_SUCCESS" = true ]; then
   lxc exec "${CONTAINER}" -- bash -lc "cd /root && ${REPO_CMD} 2>/dev/null || git clone 'https://github.com/${GH_ORG_VAR}/${GH_PROJECT_VAR}.git' '${REPO_NAME}' 2>/dev/null || true"
 fi
 
-echo "==> Installing project dependencies..."
-lxc exec "${CONTAINER}" -- bash -lc "
-  cd /home/ubuntu/${REPO_NAME} 2>/dev/null || cd /root/${REPO_NAME} 2>/dev/null || { echo 'No repo directory found, skipping deps'; exit 0; }
-  if [ -f package.json ]; then
-    echo 'Installing npm dependencies...'
-    npm install || echo 'npm install failed'
-  elif [ -f requirements.txt ]; then
-    echo 'Installing Python dependencies...'
-    apt-get install -y python3 python3-pip
-    pip3 install -r requirements.txt || echo 'pip install failed'
-  elif [ -f Gemfile ]; then
-    echo 'Installing Ruby dependencies...'
-    apt-get install -y ruby-full
-    gem install bundler
-    bundle install || echo 'bundle install failed'
-  else
-    echo 'No known dependency file found (package.json, requirements.txt, Gemfile)'
+# Framework setup (post-clone)
+echo "==> Framework setup (auto-detect or FRAMEWORKS override)..."
+FRAMEWORKS_VAL="${FRAMEWORKS:-}"
+
+lxc exec "${CONTAINER}" --env FRAMEWORKS="$FRAMEWORKS_VAL" -- bash -lc '
+  set -e
+  REPO_DIR="/home/ubuntu/'"${REPO_NAME}"'"
+  if [ ! -d "$REPO_DIR" ]; then
+    echo "No repository directory found at $REPO_DIR, skipping framework setup"
+    exit 0
   fi
-"
+  cd "$REPO_DIR"
+
+  requested="$FRAMEWORKS"
+  if [ -z "$requested" ]; then
+    # Auto-detect
+    if [ -f package.json ]; then
+      requested="${requested:+$requested:}node:npm"
+      grep -q '"typescript"' package.json && requested="${requested}:ts" || true
+      grep -q '"next"' package.json && requested="${requested}:nextjs" || true
+      grep -q '@mui/material' package.json && requested="${requested}:mui" || true
+    fi
+    if [ -f go.mod ]; then requested="${requested:+$requested:}go"; fi
+    if [ -f hxml ] || ls *.hxml >/dev/null 2>&1; then requested="${requested:+$requested:}haxe"; fi
+  fi
+
+  normalize() {
+    echo "$1" | tr ",;" ":" | tr -s ":" | sed 's/^:\|:$//g'
+  }
+  requested=$(normalize "$requested")
+  echo "Detected/Requested frameworks: ${requested:-none}"
+
+  install_node() {
+    if ! command -v node >/dev/null 2>&1; then
+      curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+      apt-get install -y nodejs
+      npm -v || true
+    fi
+  }
+
+  IFS=":" read -r -a items <<< "$requested"
+  for fw in "${items[@]}"; do
+    case "$fw" in
+      node|npm)
+        install_node
+        ;;
+      ts|typescript)
+        install_node
+        if [ -f package.json ] && ! grep -q '"typescript"' package.json; then
+          npm install -D typescript || true
+        fi
+        ;;
+      next|nextjs)
+        install_node
+        if [ -f package.json ] && ! grep -q '"next"' package.json; then
+          npm install next || true
+        fi
+        ;;
+      mui)
+        install_node
+        if [ -f package.json ] && ! grep -q '@mui/material' package.json; then
+          npm install @mui/material @emotion/react @emotion/styled || true
+        fi
+        ;;
+      go|golang)
+        apt-get update && apt-get install -y golang || true
+        ;;
+      haxe)
+        apt-get update && apt-get install -y haxe || true
+        ;;
+      *)
+        :
+        ;;
+    esac
+  done
+
+  # Install project dependencies if Node project
+  if [ -f package.json ]; then
+    echo "Installing npm dependencies..."
+    (command -v npm >/dev/null 2>&1 && npm ci) || npm install || true
+    chown -R ubuntu:ubuntu .
+  fi
+'
+
+# Dependencies are now installed in the framework setup section above
 
 echo
 echo "==> Development environment ready!"
