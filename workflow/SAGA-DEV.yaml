@@ -1,0 +1,22 @@
+---
+name: SAGA-DEV
+command: " cd /Users/lpm/Documents/Warp\n./saga-dev-workflow.sh {{repo}} {{lxc_container}} {{lxc_project}}"
+description: Tilgå eller opret en saga-dev
+arguments:
+  - name: repo
+    arg_type: Text
+    description: gh repo
+    default_value: gh repo clone SagasWeave/forfatter-pwa
+  - name: lxc_container
+    arg_type: Text
+    description: lxc container
+    default_value: saga-dev
+  - name: lxc_project
+    arg_type: Text
+    description: "lxc project "
+    default_value: weaver
+tags: []
+source_url: ~
+author: ~
+author_url: ~
+shells: []
