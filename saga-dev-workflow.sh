@@ -132,8 +132,28 @@ if command -v tailscale >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     # Check if any devices still exist with this hostname
     REMAINING_DEVICES=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.HostName == \"${CONTAINER}\") | .ID" 2>/dev/null | wc -l || echo "0")
     if [ "$REMAINING_DEVICES" -gt 0 ]; then
-      echo "    - WARNING: $REMAINING_DEVICES devices still exist with hostname '${CONTAINER}'"
-      echo "    - New container may get hostname suffix (e.g., ${CONTAINER}-1)"
+      echo "    - ⚠️  CRITICAL: $REMAINING_DEVICES devices still exist with hostname '${CONTAINER}'"
+      echo
+      echo "📋 MANUAL ACTION REQUIRED:"
+      echo "   Please remove the existing '${CONTAINER}' device(s) from Tailscale:"
+      echo "   1. Open https://login.tailscale.com/admin/machines"
+      echo "   2. Find device(s) named '${CONTAINER}'"
+      echo "   3. Click the '...' menu and select 'Delete'"
+      echo "   4. Confirm deletion"
+      echo
+      echo "   Or check current devices with:"
+      tailscale status --json | jq -r ".Peer[] | select(.HostName == \"${CONTAINER}\") | \"ID: \" + .ID + \", IP: \" + .TailscaleIPs[0] + \", Online: \" + (.Online | tostring)"
+      echo
+      echo "🛑 Script paused. Press ENTER after removing the device(s) to continue..."
+      read -r
+      
+      # Re-check after user action
+      REMAINING_AFTER=$(tailscale status --json 2>/dev/null | jq -r ".Peer[] | select(.HostName == \"${CONTAINER}\") | .ID" 2>/dev/null | wc -l || echo "0")
+      if [ "$REMAINING_AFTER" -gt 0 ]; then
+        echo "    - ❌ Device(s) still exist. Continuing anyway - new container may get suffix."
+      else
+        echo "    - ✅ Great! Hostname '${CONTAINER}' is now free for use"
+      fi
     else
       echo "    - ✅ Hostname '${CONTAINER}' is now free for use"
     fi
@@ -246,7 +266,10 @@ lxc exec "${CONTAINER}" -- bash -lc '
 
 echo "==> Bringing up Tailscale (ephemeral) with SSH enabled and static hostname '${CONTAINER}'..."
 echo "    - The login URL will be printed below. Open it in your browser to authorize."
-lxc exec "${CONTAINER}" -- bash -lc "tailscale up --ssh --ephemeral --hostname '${CONTAINER}' --reset || true"
+# More aggressive approach: force reauth and reset everything
+lxc exec "${CONTAINER}" -- bash -lc "tailscale logout || true"
+sleep 2
+lxc exec "${CONTAINER}" -- bash -lc "tailscale up --ssh --ephemeral --hostname '${CONTAINER}' --reset --force-reauth --accept-routes=false || true"
 
 echo "==> Current Tailscale status (container):"
 lxc exec "${CONTAINER}" -- bash -lc 'tailscale status || true'
