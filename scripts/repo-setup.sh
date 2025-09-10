@@ -72,59 +72,117 @@ fi
 
 progress "Starting repository clone: ${GH_ORG}/${GH_PROJECT}"
 
+# LOGIN APPROACH: Create repository clone script to run inside container
+cat > /tmp/repo_clone_setup.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+echo "Starting repository clone inside container..."
+echo "Target: ${GH_ORG}/${GH_PROJECT} -> ${REPO_NAME}"
+
 # Clone repository to both user directories
 for base_dir in "/root" "/home/ubuntu"; do
     dest="${base_dir}/${REPO_NAME}"
+    echo "Processing directory: $dest"
     
-    lxc exec "$CONTAINER" -- bash -c "
-        set -euo pipefail
-        
-        if [ -d '$dest' ]; then
-            echo 'Repository already exists at $dest'
-        else
-            echo 'Cloning to $dest...'
-            cd '$base_dir'
-            
-            if $AUTHENTICATED && command -v gh >/dev/null 2>&1; then
-                # Use gh CLI (handles private repos automatically)
-                gh repo clone '${GH_ORG}/${GH_PROJECT}' '${REPO_NAME}' 2>/dev/null || exit 1
-            elif [ -n '${GITHUB_TOKEN}' ]; then
-                # Use git with token
-                git clone 'https://${GITHUB_TOKEN}@github.com/${GH_ORG}/${GH_PROJECT}.git' '${REPO_NAME}' 2>/dev/null || exit 1
-            else
-                # Try public clone
-                git clone 'https://github.com/${GH_ORG}/${GH_PROJECT}.git' '${REPO_NAME}' 2>/dev/null || exit 1
-            fi
-            
-            # Set ownership for ubuntu directory
-            if [ '$base_dir' = '/home/ubuntu' ] && [ -d '$dest' ]; then
-                chown -R ubuntu:ubuntu '$dest' 2>/dev/null || true
-            fi
-            
-            echo 'Repository cloned successfully'
-        fi
-    " || {
-        progress "⚠️ Failed to clone to $dest"
+    if [ -d "$dest" ]; then
+        echo "Repository already exists at $dest"
         continue
-    }
+    fi
     
-    progress "✅ Repository available at $dest"
+    echo "Cloning to $dest..."
+    cd "$base_dir"
+    
+    # Try different clone methods based on available tools and credentials
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        echo "Using GitHub CLI (authenticated)"
+        if gh repo clone "${GH_ORG}/${GH_PROJECT}" "${REPO_NAME}" 2>/dev/null; then
+            echo "✅ GitHub CLI clone successful"
+        else
+            echo "⚠️ GitHub CLI clone failed, trying git with token"
+            if [ -n "${GITHUB_TOKEN:-}" ]; then
+                git clone "https://${GITHUB_TOKEN}@github.com/${GH_ORG}/${GH_PROJECT}.git" "${REPO_NAME}" 2>/dev/null || {
+                    echo "❌ Git clone with token failed"
+                    continue
+                }
+            else
+                echo "❌ No GitHub token available for fallback"
+                continue
+            fi
+        fi
+    elif [ -n "${GITHUB_TOKEN:-}" ]; then
+        echo "Using git clone with token"
+        if git clone "https://${GITHUB_TOKEN}@github.com/${GH_ORG}/${GH_PROJECT}.git" "${REPO_NAME}" 2>/dev/null; then
+            echo "✅ Git clone with token successful"
+        else
+            echo "⚠️ Private repo clone failed, trying public"
+            git clone "https://github.com/${GH_ORG}/${GH_PROJECT}.git" "${REPO_NAME}" 2>/dev/null || {
+                echo "❌ Public clone also failed"
+                continue
+            }
+        fi
+    else
+        echo "Using public git clone"
+        if git clone "https://github.com/${GH_ORG}/${GH_PROJECT}.git" "${REPO_NAME}" 2>/dev/null; then
+            echo "✅ Public clone successful"
+        else
+            echo "❌ Public clone failed - repository may be private"
+            continue
+        fi
+    fi
+    
+    # Set ownership for ubuntu directory
+    if [ "$base_dir" = "/home/ubuntu" ] && [ -d "$dest" ]; then
+        chown -R ubuntu:ubuntu "$dest" 2>/dev/null || true
+        echo "Updated ownership for ubuntu user"
+    fi
+    
+    echo "✅ Repository available at $dest"
     
     # Install npm dependencies if package.json exists
-    if lxc exec "$CONTAINER" -- test -f "$dest/package.json" && lxc exec "$CONTAINER" -- command -v npm >/dev/null 2>&1; then
-        progress "Installing npm dependencies in $dest..."
+    if [ -f "$dest/package.json" ] && command -v npm >/dev/null 2>&1; then
+        echo "Installing npm dependencies in $dest..."
+        cd "$dest"
         
-        lxc exec "$CONTAINER" -- bash -c "
-            cd '$dest'
-            npm ci 2>/dev/null || npm install 2>/dev/null || echo 'npm install failed'
+        if npm ci 2>/dev/null || npm install 2>/dev/null; then
+            echo "✅ npm dependencies installed"
             
             # Fix ownership for ubuntu
-            if [ '$base_dir' = '/home/ubuntu' ]; then
+            if [ "$base_dir" = "/home/ubuntu" ]; then
                 chown -R ubuntu:ubuntu . 2>/dev/null || true
             fi
-        " && progress "npm dependencies installed" || progress "⚠️ npm install failed"
+        else
+            echo "⚠️ npm install failed"
+        fi
     fi
 done
+
+echo "Repository clone setup completed"
+EOF
+
+# Copy script to container
+chmod +x /tmp/repo_clone_setup.sh
+lxc file push /tmp/repo_clone_setup.sh "$CONTAINER/tmp/repo_clone.sh"
+
+progress "Cloning repository using login approach..."
+
+# LOGIN APPROACH: Execute with environment variables set
+clone_env="GH_ORG=${GH_ORG} GH_PROJECT=${GH_PROJECT} REPO_NAME=${REPO_NAME}"
+if [ -n "$GITHUB_TOKEN" ]; then
+    clone_env="$clone_env GITHUB_TOKEN=${GITHUB_TOKEN}"
+fi
+
+if lxc exec "$CONTAINER" --env "$clone_env" -- bash /tmp/repo_clone.sh; then
+    progress "✅ Repository clone completed successfully"
+else
+    progress "❌ Repository clone failed"
+    echo "error" > "/tmp/repo-done"
+    exit 1
+fi
+
+# Cleanup
+lxc exec "$CONTAINER" -- rm -f /tmp/repo_clone.sh
+rm -f /tmp/repo_clone_setup.sh
 
 progress "✅ Repository clone complete"
 echo "done" > "/tmp/repo-done"

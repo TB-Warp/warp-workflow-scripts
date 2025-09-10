@@ -50,14 +50,17 @@ done
 
 progress "Starting GitHub CLI installation..."
 
-# Install GitHub CLI
-lxc exec "$CONTAINER" -- bash -c '
+# LOGIN APPROACH: Create complete installation script to run inside container
+cat > /tmp/gh_complete_setup.sh <<'EOF'
+#!/bin/bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+echo "Starting GitHub CLI installation inside container..."
+
 # Check if already installed
 if command -v gh >/dev/null 2>&1; then
-    echo "GitHub CLI already installed"
+    echo "GitHub CLI already installed: $(gh --version | head -1)"
 else
     echo "Installing GitHub CLI..."
     
@@ -69,30 +72,73 @@ else
     # Install
     apt-get update -qq
     apt-get install -y -qq gh
-fi
-'
-
-if [ -n "$GITHUB_TOKEN" ]; then
-    progress "Configuring GitHub authentication..."
     
-    # Configure authentication
-    lxc exec "$CONTAINER" -- bash -c "
-        echo '$GITHUB_TOKEN' | gh auth login --with-token 2>/dev/null || true
-        
-        # Add token to environment files
-        echo 'export GITHUB_TOKEN=$GITHUB_TOKEN' >> /root/.bashrc
-        echo 'export GITHUB_TOKEN=$GITHUB_TOKEN' >> /home/ubuntu/.bashrc 2>/dev/null || true
-    "
+    echo "GitHub CLI installed: $(gh --version | head -1)"
+fi
+
+# Configure authentication if token is available
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+    echo "Configuring GitHub authentication..."
+    
+    # Authenticate using the token (in container environment)
+    echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null || {
+        echo "⚠️ GitHub authentication failed"
+        exit 1
+    }
+    
+    # Add token to shell environments
+    echo "export GITHUB_TOKEN=$GITHUB_TOKEN" >> /root/.bashrc
+    if [ -d /home/ubuntu ]; then
+        echo "export GITHUB_TOKEN=$GITHUB_TOKEN" >> /home/ubuntu/.bashrc 2>/dev/null || true
+        chown ubuntu:ubuntu /home/ubuntu/.bashrc 2>/dev/null || true
+    fi
     
     # Verify authentication
-    if lxc exec "$CONTAINER" -- gh auth status >/dev/null 2>&1; then
-        progress "✅ Authenticated successfully"
+    if gh auth status >/dev/null 2>&1; then
+        echo "✅ GitHub authentication successful"
+        gh auth status
     else
-        progress "⚠️ Authentication failed, but CLI installed"
+        echo "⚠️ GitHub authentication verification failed"
+        exit 1
     fi
 else
-    progress "⚠️ No GitHub token provided, CLI installed but not authenticated"
+    echo "⚠️ No GITHUB_TOKEN environment variable found"
+    echo "   GitHub CLI installed but not authenticated"
 fi
+
+echo "GitHub CLI setup completed successfully"
+EOF
+
+# Copy script to container
+chmod +x /tmp/gh_complete_setup.sh
+lxc file push /tmp/gh_complete_setup.sh "$CONTAINER/tmp/gh_setup.sh"
+
+progress "Installing GitHub CLI using login approach..."
+
+# LOGIN APPROACH: Execute script with proper environment
+if [ -n "$GITHUB_TOKEN" ]; then
+    # Execute with GITHUB_TOKEN environment variable set
+    if lxc exec "$CONTAINER" --env GITHUB_TOKEN="$GITHUB_TOKEN" -- bash /tmp/gh_setup.sh; then
+        progress "✅ GitHub CLI installed and authenticated successfully"
+    else
+        progress "❌ GitHub CLI setup failed"
+        echo "error" > "/tmp/github-done"
+        exit 1
+    fi
+else
+    # Execute without token
+    if lxc exec "$CONTAINER" -- bash /tmp/gh_setup.sh; then
+        progress "✅ GitHub CLI installed (no authentication)"
+    else
+        progress "❌ GitHub CLI installation failed"
+        echo "error" > "/tmp/github-done"
+        exit 1
+    fi
+fi
+
+# Cleanup
+lxc exec "$CONTAINER" -- rm -f /tmp/gh_setup.sh
+rm -f /tmp/gh_complete_setup.sh
 
 progress "✅ GitHub CLI setup complete"
 echo "done" > "/tmp/github-done"

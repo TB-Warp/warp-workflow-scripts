@@ -230,6 +230,28 @@ flag() {
     fi
 }
 
+# Host-based status checks for better reliability
+check_host_tailscale_status() {
+    # Use host tailscale CLI to check if container is connected
+    if command -v tailscale >/dev/null 2>&1; then
+        if tailscale status 2>/dev/null | grep -q "${CONTAINER}"; then
+            echo "done" > "/tmp/tailscale-done"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+check_container_github_cli() {
+    # Check if GitHub CLI is actually installed and working in container
+    if lxc exec "${CONTAINER}" -- command -v gh >/dev/null 2>&1; then
+        if lxc exec "${CONTAINER}" -- gh --version >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 echo "⏳ Starting background jobs..."
 
 # Status monitoring loop with timeout awareness
