@@ -27,8 +27,6 @@ set -euo pipefail
 # Read from environment variables
 GH_ORG_VAR="${GH_ORG:-}"
 GH_PROJECT_VAR="${GH_PROJECT:-}"
-CONTAINER="${CONTAINER:-}"
-PROJECT="${PROJECT:-}"
 
 # Build repository command from org and project
 if [ -n "$GH_ORG_VAR" ] && [ -n "$GH_PROJECT_VAR" ]; then
@@ -58,7 +56,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 # Validate required environment variables
-if [ -z "$GH_ORG_VAR" ] || [ -z "$GH_PROJECT_VAR" ] || [ -z "$CONTAINER" ]; then
+if [ -z "$GH_ORG" ] || [ -z "$GH_PROJECT" ] || [ -z "$CONTAINER" ]; then
   echo "Error: Required environment variables not set" >&2
   echo "  GH_ORG     = '${GH_ORG:-<not set>}'" >&2
   echo "  GH_PROJECT = '${GH_PROJECT:-<not set>}'" >&2
@@ -477,10 +475,11 @@ apt_wrap() {
 ) &
 EOF_ASYNC
   
-  # Start the async bootstrap (fire-and-forget)
+  # Start the async bootstrap (fire-and-forget) 
   echo "$(date): Launching async bootstrap script..." > /tmp/bootstrap_async.out
-  nohup bash /root/bootstrap_async.sh >>/tmp/bootstrap_async.out 2>&1 & disown
-  echo "Async bootstrap PID $! started" >> /tmp/bootstrap_async.out
+  bash /root/bootstrap_async.sh >>/tmp/bootstrap_async.out 2>&1 &
+  BOOTSTRAP_PID=$!
+  echo "Async bootstrap PID $BOOTSTRAP_PID started" >> /tmp/bootstrap_async.out
 '
 echo "==> Async bootstrap started!"
 echo "✅ Network ready. Background setup continues safely."
