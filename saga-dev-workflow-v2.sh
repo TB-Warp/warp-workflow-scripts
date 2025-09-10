@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-# Use environment variables with sensible defaults (NO HARDCODED SECRETS)
+# Use environment variables from Warp Drive (EXACTLY like original working version)
 GH_ORG_VAR="${GH_ORG:-SagasWeave}"
 GH_PROJECT_VAR="${GH_PROJECT:-forfatter-pwa}"
 CONTAINER="${CONTAINER:-saga-dev}"
@@ -17,8 +17,13 @@ PROJECT="${PROJECT:-weave}"
 IMAGE="${IMAGE:-ubuntu:24.04}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 FRAMEWORKS="${FRAMEWORKS:-node:npm:ts:nextjs:mui}"
+REPO_NAME="$GH_PROJECT_VAR"
 
-# Validate required variables
+# Validate required variables (allow defaults for Warp Drive compatibility)
+if [ "$GH_ORG_VAR" = "SagasWeave" ] && [ "$GH_PROJECT_VAR" = "forfatter-pwa" ] && [ "$CONTAINER" = "saga-dev" ]; then
+    echo "✅ Using Warp Drive defaults for SAGA-DEV workflow" >&2
+fi
+
 if [ -z "$GH_ORG_VAR" ] || [ -z "$GH_PROJECT_VAR" ] || [ -z "$CONTAINER" ]; then
     echo "Error: Required environment variables not set" >&2
     echo "  GH_ORG     = '${GH_ORG:-<not set>}'" >&2
@@ -36,8 +41,7 @@ else
     echo "✅ GitHub token detected (${#GITHUB_TOKEN} characters)" >&2
 fi
 
-# Derived variables
-REPO_NAME="$GH_PROJECT_VAR"
+# Derived variables (remove duplicate REPO_NAME)
 STORAGE_POOL="SSD1TB"
 PROFILE="shared-client"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts"
