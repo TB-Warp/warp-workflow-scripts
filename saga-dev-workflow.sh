@@ -65,8 +65,8 @@ fi
 # Config
 STORAGE_POOL="SSD1TB"
 PROFILE="shared-client"   # per org rule (preferred over 'default')
-IMAGE_PRIMARY="ubuntu-minimal:25.04"
-IMAGE_FALLBACK="images:ubuntu/25.04/minimal"
+IMAGE_PRIMARY="images:ubuntu/24.04"
+IMAGE_FALLBACK="ubuntu:24.04"
 
 # Repository info is now set above from GH_ORG and GH_PROJECT
 GITHUB_REPO="$REPO_CMD"  # For backward compatibility
@@ -342,13 +342,29 @@ fi
 # Fallback to git clone with HTTPS if gh failed or not available
 if [ "$CLONE_SUCCESS" = false ]; then
   echo "    - Fallback: Using git clone with HTTPS"
-  GIT_URL="https://github.com/${GH_ORG_VAR}/${GH_PROJECT_VAR}.git"
-  if lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && git clone '${GIT_URL}' '${REPO_NAME}' && chown -R ubuntu:ubuntu '${REPO_NAME}' 2>/dev/null"; then
-    CLONE_SUCCESS=true
-    echo "    - git clone successful in /home/ubuntu/${REPO_NAME}"
-  else
-    echo "    - WARNING: Both gh and git clone failed. Repository may be private or network issue."
-    echo "    - Continuing without repository..."
+  
+  # Try with GITHUB_TOKEN if available (for private repos)
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    echo "    - Using GITHUB_TOKEN for private repository access"
+    GIT_URL_WITH_TOKEN="https://${GITHUB_TOKEN}@github.com/${GH_ORG_VAR}/${GH_PROJECT_VAR}.git"
+    if lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && git clone '${GIT_URL_WITH_TOKEN}' '${REPO_NAME}' && chown -R ubuntu:ubuntu '${REPO_NAME}' 2>/dev/null"; then
+      CLONE_SUCCESS=true
+      echo "    - git clone with token successful in /home/ubuntu/${REPO_NAME}"
+    else
+      echo "    - git clone with token failed, trying public clone..."
+    fi
+  fi
+  
+  # Final fallback: public clone without token
+  if [ "$CLONE_SUCCESS" = false ]; then
+    GIT_URL="https://github.com/${GH_ORG_VAR}/${GH_PROJECT_VAR}.git"
+    if lxc exec "${CONTAINER}" -- bash -lc "cd /home/ubuntu && git clone '${GIT_URL}' '${REPO_NAME}' && chown -R ubuntu:ubuntu '${REPO_NAME}' 2>/dev/null"; then
+      CLONE_SUCCESS=true
+      echo "    - git clone (public) successful in /home/ubuntu/${REPO_NAME}"
+    else
+      echo "    - WARNING: All clone methods failed. Repository may be private or network issue."
+      echo "    - Continuing without repository..."
+    fi
   fi
 fi
 
